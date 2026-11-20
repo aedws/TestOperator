@@ -1,7 +1,7 @@
 # 기출 빈도 분석 (국가기술자격 필기)
 
 기출 문항을 개념 단위로 묶어 출제 빈도를 세고, 공부 범위를 압축하기 위한 작업 공간입니다.
-현재 단계: **1단계 파일럿** — 소방설비기사(전기분야) 소방원론, 2022년 1회·2회.
+현재 단계: **2단계** — 소방설비기사(전기분야) 필기 4과목, 2016년 1회 ~ 2026년 1회 31회차(공개 기출 20 + CBT 복원 11), 2,480문항.
 
 ## 산출물 (`output/`)
 
@@ -17,16 +17,18 @@
 ## 다시 만드는 법
 
 ```bash
-python3 scripts/analyze.py            # 기준값: --regular 0.5 --sometimes 0.15
+python3 scripts/analyze.py            # 기준값: --regular 0.5 --sometimes 0.15 --killer-max-rounds 2
 ```
 
-- `data/tags/*_tags.csv`: 문항별 개념ID·요지·개정무효 (직접 수정 가능)
+- `data/tags/tags.csv`: 문항별 개념ID·요지·개정무효 (직접 수정 가능)
 - `data/tags/concepts.csv`: 개념 사전 (출제기준 항목, 핵심내용, 공식, 법조문)
 - `data/taxonomy/`: 큐넷 출제기준(2026~2027 적용)에서 만든 분류 체계
-- `data/sources.csv`: 사이트별 robots.txt 확인 결과와 수집 여부
+- `data/sources.csv`: 출처별 robots.txt 확인 결과와 수집 여부
+
+원자료부터 다시 만드는 순서: `collect_public.sh`(공개 기출) → `parse_moducbt.py`(전자책 PDF) →
+`build_dataset.py`(통합·정답 교차검증) → `prep_tagging.py` → 분류 → `validate_tags.py` → `export_tags.py` → `analyze.py`
 
 ## 원문 비공개
 
 기출 원문은 개인 학습용이며 재배포하지 않습니다. `data/raw/`와 `output/1_원본데이터.csv`는
-`.gitignore`로 제외했습니다. 수집 스크립트(`scripts/parse_cbtbank.py`, `scripts/crosscheck_answers.py`)로
-다시 만들 수 있습니다.
+`.gitignore`로 제외했습니다. 공개 기출은 수집 스크립트로 다시 만들 수 있고, 복원 회차는 구매한 전자책 PDF가 있어야 합니다.
