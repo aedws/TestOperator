@@ -162,11 +162,13 @@
 
   // ---------- 문제 은행 ----------
   function quizSetup(params) {
-    const cfg = store.get('quizcfg', { src: 'practice', codes: DATA.subjects.map((s) => s.code), n: 20, mode: 'instant', wrong: false, regular: true });
+    const cfg = store.get('quizcfg', { src: 'practice', codes: DATA.subjects.map((s) => s.code), n: 20, mode: 'instant', wrong: false, regular: true, noimg: true });
+    if (cfg.noimg == null) cfg.noimg = true;
     if (params.get('s') && SUBJ[params.get('s')]) cfg.codes = [params.get('s')];
-    if (cfg.src === 'mine' && !MINE) cfg.src = 'practice';
+    if (cfg.src !== 'practice' && !MINE) cfg.src = 'practice';
     const pool = () => {
-      let qs = cfg.src === 'mine' ? MINE.filter((q) => cfg.codes.includes(q.code) && (!cfg.regular || q.grade === '단골')) : practiceQs(cfg.codes);
+      const mine = () => MINE.filter((q) => cfg.codes.includes(q.code) && (!cfg.regular || q.grade === '단골') && (!cfg.noimg || !q.img));
+      let qs = cfg.src === 'mine' ? mine() : cfg.src === 'both' ? [...practiceQs(cfg.codes), ...mine()] : practiceQs(cfg.codes);
       if (cfg.wrong) qs = qs.filter((q) => hist[q.id] && hist[q.id][1] > 0 && hist[q.id][1] >= hist[q.id][0]);
       return qs;
     };
@@ -176,11 +178,12 @@
       const pick = (name, value, label, checked, on, type = 'radio') => h('label', { class: 'pick' }, h('input', { type, name, checked, onchange: on }), label);
       render(
         h('h1', {}, '문제 은행'),
-        h('p', { class: 'muted' }, '사이트에 실린 문제는 단골 개념마다 새로 만든 연습 문제입니다. 실제 기출로 풀려면 "내 기출"에서 파일을 불러오세요.'),
+        h('p', { class: 'muted' }, '연습 문제는 단골 개념마다 새로 만든 문제이고, 실제 기출은 비밀번호로 잠겨 있습니다. "기출 잠금"에서 한 번 풀면 이 기기에서는 계속 쓸 수 있습니다.'),
         h('fieldset', {}, h('legend', {}, '문제 종류'),
           pick('src', 'practice', '연습 문제', cfg.src === 'practice', () => { cfg.src = 'practice'; draw(); }),
-          MINE ? pick('src', 'mine', `내 기출 (${MINE.length}문항)`, cfg.src === 'mine', () => { cfg.src = 'mine'; draw(); })
-            : h('a', { class: 'small', href: '#/import' }, '내 기출 파일 불러오기 ›')),
+          MINE ? [pick('src', 'mine', `실제 기출 (${MINE.length}문항)`, cfg.src === 'mine', () => { cfg.src = 'mine'; draw(); }),
+            pick('src', 'both', '둘 다 섞어서', cfg.src === 'both', () => { cfg.src = 'both'; draw(); })]
+            : h('a', { class: 'small', href: '#/import' }, '실제 기출 잠금 해제 ›')),
         h('fieldset', {}, h('legend', {}, '과목'), DATA.subjects.map((s) => pick('c', s.code, s.name, cfg.codes.includes(s.code), (e) => {
           cfg.codes = e.target.checked ? [...cfg.codes, s.code] : cfg.codes.filter((x) => x !== s.code); draw();
         }, 'checkbox'))),
@@ -190,7 +193,8 @@
         cfg.mode === 'instant' && h('fieldset', {}, h('legend', {}, '문항 수'), [10, 20, 40].map((n) => pick('n', n, n + '문항', cfg.n === n, () => { cfg.n = n; draw(); }))),
         h('fieldset', {}, h('legend', {}, '범위'),
           pick('w', 1, '틀렸던 문제만', cfg.wrong, (e) => { cfg.wrong = e.target.checked; draw(); }, 'checkbox'),
-          cfg.src === 'mine' && pick('r', 1, '단골 개념 문제만', cfg.regular, (e) => { cfg.regular = e.target.checked; draw(); }, 'checkbox')),
+          cfg.src !== 'practice' && pick('r', 1, '기출은 단골 개념 문제만', cfg.regular, (e) => { cfg.regular = e.target.checked; draw(); }, 'checkbox'),
+          cfg.src !== 'practice' && pick('g', 1, '그림이 빠진 기출 문항 제외', cfg.noimg, (e) => { cfg.noimg = e.target.checked; draw(); }, 'checkbox')),
         h('p', { class: 'small muted' }, `조건에 맞는 문제 ${qs.length}개`),
         h('div', { class: 'btns' }, h('button', { class: 'btn primary', disabled: !qs.length, onclick: () => start(cfg, qs) }, '시작')));
     };
@@ -284,11 +288,35 @@
       out.push({ id: 'g|' + key, code, cid: t ? t[0] : null, grade: t && TAGS.concepts[t[0]] ? TAGS.concepts[t[0]][0] : null,
         q: `[${r[col('연도')]}년 ${r[col('회차')]}회${restored ? ' 복원' : ''} ${r[col('문항번호')]}번] ${r[col('문제')]}`,
         choices: [1, 2, 3, 4].map((k) => r[col('보기' + k)]), answer: ans, expl: '',
-        status: col('정답확인상태') >= 0 ? r[col('정답확인상태')] : '' });
+        status: col('정답확인상태') >= 0 ? r[col('정답확인상태')] : '',
+        img: /\[그림\]/.test(r[col('문제')] + [1, 2, 3, 4].map((k) => r[col('보기' + k)]).join('')) });
     }
     return out;
   }
+  const b64 = (t) => Uint8Array.from(atob(t), (c) => c.charCodeAt(0));
+  async function unlock(password) {
+    if (!(window.crypto && crypto.subtle)) throw new Error('이 브라우저에서는 암호 해제를 쓸 수 없습니다(https 주소로 열어 주세요).');
+    const res = await fetch('data/mine.enc');
+    if (!res.ok) throw new Error('암호화된 기출 파일이 사이트에 없습니다.');
+    const f = await res.json();
+    const base = await crypto.subtle.importKey('raw', new TextEncoder().encode(password), 'PBKDF2', false, ['deriveKey']);
+    const key = await crypto.subtle.deriveKey({ name: 'PBKDF2', hash: 'SHA-256', salt: b64(f.salt), iterations: f.iter }, base, { name: 'AES-GCM', length: 256 }, false, ['decrypt']);
+    let plain;
+    try { plain = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: b64(f.iv) }, key, b64(f.ct)); } catch { throw new Error('비밀번호가 맞지 않습니다.'); }
+    const text = await new Response(new Blob([plain]).stream().pipeThrough(new DecompressionStream('gzip'))).text();
+    return JSON.parse(text);
+  }
+
   function importView(msg) {
+    const pw = h('input', { type: 'password', placeholder: '비밀번호', autocomplete: 'current-password', style: 'font:inherit;padding:9px 12px;border-radius:10px;border:1px solid var(--line);background:var(--card);color:var(--ink);min-width:0;flex:1' });
+    const go = async (e) => {
+      e.preventDefault();
+      const v = pw.value.replace(/[\s-]+/g, '').toLowerCase();
+      if (!v) return;
+      importView('푸는 중입니다…');
+      try { const qs = await unlock(v); await idb.set('mine', qs); MINE = qs; importView(`잠금을 풀었습니다. 기출 ${qs.length}문항을 이 기기에 저장했습니다.`); }
+      catch (err) { importView('열지 못했습니다: ' + err.message); }
+    };
     const file = h('input', { type: 'file', accept: '.csv,text/csv' });
     file.addEventListener('change', async () => {
       const f = file.files[0];
@@ -302,15 +330,16 @@
     });
     const by = MINE ? DATA.subjects.map((s) => `${s.name} ${MINE.filter((q) => q.code === s.code).length}`).join(' · ') : '';
     render(
-      h('h1', {}, '내 기출 불러오기'),
-      h('p', {}, '실제 기출 문제는 저작권 때문에 이 사이트에 싣지 않았습니다. 갖고 있는 기출 파일(1_원본데이터.csv)을 여기서 고르면 실제 기출로 문제 은행을 쓸 수 있습니다.'),
-      h('p', { class: 'muted small' }, '파일은 이 브라우저 안에만 저장되고 어디로도 전송되지 않습니다. 다른 기기에서는 다시 불러와야 합니다.'),
+      h('h1', {}, '실제 기출 잠금 해제'),
+      h('p', {}, '실제 기출 문제는 저작권 때문에 암호화해서 실었습니다. 비밀번호를 넣으면 이 기기에서 풀려 문제 은행에서 쓸 수 있습니다.'),
+      h('p', { class: 'muted small' }, '비밀번호는 어디로도 전송되지 않고, 푼 문제는 이 브라우저 안에만 저장됩니다. 기기마다 한 번씩만 풀면 됩니다. 비밀번호를 다른 사람과 나누지 마세요.'),
       msg && h('div', { class: 'box' }, msg),
-      h('div', { class: 'card' }, MINE ? h('p', {}, h('b', {}, `불러온 기출 ${MINE.length}문항`), h('br'), h('span', { class: 'small muted' }, by),
-        h('br'), h('span', { class: 'small muted' }, `단골 개념 문항 ${MINE.filter((q) => q.grade === '단골').length}개 · 개정으로 답이 달라진 문항은 뺐습니다.`)) : h('p', { class: 'muted' }, '아직 불러온 파일이 없습니다.'), file),
+      !MINE && h('form', { class: 'card', style: 'display:flex;gap:8px;margin-bottom:12px', onsubmit: go }, pw, h('button', { class: 'btn primary', type: 'submit' }, '잠금 해제')),
+      h('div', { class: 'card' }, MINE ? h('p', {}, h('b', {}, `이 기기에 저장된 기출 ${MINE.length}문항`), h('br'), h('span', { class: 'small muted' }, by),
+        h('br'), h('span', { class: 'small muted' }, `단골 개념 문항 ${MINE.filter((q) => q.grade === '단골').length}개 · 개정으로 답이 달라진 문항은 뺐습니다.`)) : h('p', { class: 'muted small' }, '또는 갖고 있는 기출 CSV 파일을 직접 불러올 수도 있습니다.'), file),
       h('div', { class: 'btns' }, MINE && h('a', { class: 'btn primary', href: '#/quiz' }, '기출로 문제 풀기'),
-        MINE && h('button', { class: 'btn', onclick: async () => { await idb.del('mine'); MINE = null; importView('불러온 기출을 지웠습니다.'); } }, '불러온 기출 지우기')),
-      h('h2', {}, '필요한 열'),
+        MINE && h('button', { class: 'btn', onclick: async () => { await idb.del('mine'); MINE = null; importView('이 기기에 저장된 기출을 지웠습니다.'); } }, '이 기기에서 기출 지우기')),
+      h('h2', {}, 'CSV로 불러올 때 필요한 열'),
       h('p', { class: 'small muted' }, '연도, 회차, 과목, 문항번호, 문제, 보기1~보기4, 정답 (선택: 복원여부, 정답확인상태). 연도·회차·과목·문항번호가 분석 자료와 같으면 문항마다 개념이 연결됩니다.'));
   }
 
