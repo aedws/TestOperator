@@ -16,8 +16,8 @@ EXAM = '소방설비기사(전기분야)'
 SUBJ_ORDER = ['소방원론', '소방전기일반', '소방관계법규', '소방전기시설의 구조 및 원리']
 
 ap = argparse.ArgumentParser()
-ap.add_argument('--regular', type=float, default=0.5, help='단골 기준(출제 회차 비율 이상)')
-ap.add_argument('--sometimes', type=float, default=0.15, help='가끔 기준(출제 회차 비율 이상)')
+ap.add_argument('--regular', type=float, default=0.3, help='단골 기준(출제 회차 비율 이상)')
+ap.add_argument('--sometimes', type=float, default=0.1, help='가끔 기준(출제 회차 비율 이상)')
 ap.add_argument('--killer-max-rounds', type=int, default=2, help='이 회차 수 이하로만 나오면 킬러')
 ap.add_argument('--backtest-rounds', type=int, default=5, help='과락 점검에 쓸 최근 회차 수')
 ap.add_argument('--pass-line', type=int, default=8, help='과목당 과락 기준 문항 수')
