@@ -10,7 +10,7 @@ con = {r['개념ID']: r for r in rd('data/tags/concepts.csv')}
 N = int(freq[0]['전체 회차 수'])
 subjects = []
 for subj, code in CODE.items():
-    lessons = {l['cid']: l for l in load(f'{ROOT}/data/raw/site/{code}_lessons.jsonl')}
+    lessons = {l['cid']: l for l in load(f'{ROOT}/data/site/{code}_lessons.jsonl')}
     cs = []
     for r in freq:
         if r['과목'] != subj or r['등급'] != '단골' or r['개념ID'] not in lessons:
