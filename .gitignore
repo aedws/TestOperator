@@ -2,3 +2,4 @@
 data/raw/
 output/1_원본데이터.csv
 __pycache__/
+preview/
