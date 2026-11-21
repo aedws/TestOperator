@@ -6,7 +6,13 @@
   data/raw/dataset.json   문항 원문·정답·정답률 (저장소 미포함. 없으면 1번 산출물과 난이도는 생략)
 출력: output/
 
-사용: python3 scripts/analyze.py [--regular 0.5] [--sometimes 0.15] [--killer-max-rounds 2]
+등급
+  킬러: 한 회차에만 나온 개념(--killer-max-rounds 1)
+  단골: 출제 회차 비율이 기준 이상. 기준을 주지 않으면 '단골만 공부해도 최근 회차에서 합격'하는
+        가장 높은 기준을 자동으로 찾는다(과목당 과락 기준 이상 + 전체 60% 이상).
+  가끔: 그 사이
+
+사용: python3 scripts/analyze.py [--regular 0.13] [--killer-max-rounds 1] [--pass-total 0.6]
 """
 import argparse, csv, json, os
 from collections import defaultdict, Counter
@@ -16,9 +22,9 @@ EXAM = '소방설비기사(전기분야)'
 SUBJ_ORDER = ['소방원론', '소방전기일반', '소방관계법규', '소방전기시설의 구조 및 원리']
 
 ap = argparse.ArgumentParser()
-ap.add_argument('--regular', type=float, default=0.3, help='단골 기준(출제 회차 비율 이상)')
-ap.add_argument('--sometimes', type=float, default=0.1, help='가끔 기준(출제 회차 비율 이상)')
-ap.add_argument('--killer-max-rounds', type=int, default=2, help='이 회차 수 이하로만 나오면 킬러')
+ap.add_argument('--regular', type=float, default=None, help='단골 기준(출제 회차 비율 이상). 생략하면 자동 탐색')
+ap.add_argument('--pass-total', type=float, default=0.6, help='합격 기준(전체 문항 대비 비율)')
+ap.add_argument('--killer-max-rounds', type=int, default=1, help='이 회차 수 이하로만 나오면 킬러')
 ap.add_argument('--backtest-rounds', type=int, default=5, help='과락 점검에 쓸 최근 회차 수')
 ap.add_argument('--pass-line', type=int, default=8, help='과목당 과락 기준 문항 수')
 args = ap.parse_args()
@@ -77,7 +83,7 @@ void = [t for t in tags if t['개정무효'] == 'Y']
 check = [t for t in tags if t['개정무효'] == '확인필요']
 
 
-def grade_table(use):
+def grade_table(use, regular):
     """개념ID → 등급. use(회차순번 집합)에 속한 회차만으로 계산."""
     n = len(use)
     seen = defaultdict(set)
@@ -86,17 +92,54 @@ def grade_table(use):
             seen[t['개념ID']].add(t['o'])
     out = {}
     for cid, rs in seen.items():
-        ratio = len(rs) / n
-        if len(rs) <= args.killer_max_rounds or ratio < args.sometimes:
+        if len(rs) <= args.killer_max_rounds:
             out[cid] = '킬러'
-        elif ratio >= args.regular:
+        elif len(rs) / n >= regular - 1e-9:
             out[cid] = '단골'
         else:
             out[cid] = '가끔'
     return out
 
 
-grades = grade_table(set(ORD))
+def run_backtest(regular):
+    """최근 회차마다 그 이전 회차만으로 등급을 매겨 역산. (과목, 회차순번, 단골 적중, 단골+가끔 적중, 문항 수)"""
+    out = []
+    for s in subjects:
+        for o in ORD[-args.backtest_rounds:]:
+            g = grade_table({x for x in ORD if x < o}, regular)
+            target = [t for t in tags if t['o'] == o and t['과목'] == s]
+            ok = lambda t, gs: t['개정무효'] != 'Y' and g.get(t['개념ID']) in gs
+            out.append((s, o, sum(ok(t, ('단골',)) for t in target), sum(ok(t, ('단골', '가끔')) for t in target), len(target)))
+    return out
+
+
+def passes(bt):
+    """단골만으로 모든 점검 회차에서 과목별 과락 기준과 전체 합격 기준을 넘는가."""
+    for o in ORD[-args.backtest_rounds:]:
+        bs = [b for b in bt if b[1] == o]
+        if any(b[2] < args.pass_line for b in bs) or sum(b[2] for b in bs) < args.pass_total * sum(b[4] for b in bs):
+            return False
+    return True
+
+
+scan = []  # (출제 회차 수 기준 k, 단골 개념 수, 과목별 최저, 합계 최저, 합격 여부)
+full_cnt = Counter()
+for cid, rs in {c: {t['o'] for t in valid if t['개념ID'] == c} for c in {t['개념ID'] for t in valid}}.items():
+    full_cnt[cid] = len(rs)
+for k in range(min(N, 12), args.killer_max_rounds, -1):
+    bt = run_backtest(k / N)
+    tot = [sum(b[2] for b in bt if b[1] == o) for o in ORD[-args.backtest_rounds:]]
+    scan.append((k, sum(1 for v in full_cnt.values() if v >= k),
+                 min(b[2] for b in bt), min(tot), max(tot), passes(bt)))
+if args.regular is None:
+    ok_k = [x[0] for x in scan if x[5]]
+    REG_K = max(ok_k) if ok_k else args.killer_max_rounds + 1
+    REGULAR, AUTO = REG_K / N, True
+else:
+    REGULAR, AUTO = args.regular, False
+    REG_K = next(k for k in range(1, N + 1) if k / N >= REGULAR - 1e-9)
+
+grades = grade_table(set(ORD), REGULAR)
 by_c = defaultdict(list)
 for t in valid:
     by_c[t['개념ID']].append(t)
@@ -122,27 +165,21 @@ write_csv('2_개념빈도표.csv',
             difficulty(ST[c]['avg']), ref(ST[c]['rep']), ST[c]['rep']['요지']] for c in order])
 
 # ---------- 과락 점검: 그 회차 이전 회차만으로 등급을 매겨 역산 ----------
-backtest = []  # (과목, 회차순번, 단골 적중, 단골+가끔 적중, 문항 수)
-for s in subjects:
-    for o in ORD[-args.backtest_rounds:]:
-        g = grade_table({x for x in ORD if x < o})
-        target = [t for t in tags if t['o'] == o and t['과목'] == s]
-        ok = lambda t, gs: t['개정무효'] != 'Y' and g.get(t['개념ID']) in gs
-        backtest.append((s, o, sum(ok(t, ('단골',)) for t in target), sum(ok(t, ('단골', '가끔')) for t in target), len(target)))
+backtest = run_backtest(REGULAR)
 widen = {s: any(b[2] < args.pass_line for b in backtest if b[0] == s) for s in subjects}
 study = lambda s: ('단골', '가끔') if widen[s] else ('단골',)
 
 # ---------- 3. 압축 학습 목록 ----------
 md = ['# 과목별 압축 학습 목록', '',
       f'- 대상: {EXAM} 필기 / 분석 회차 {N}개 ({rounds[ORD[0]]} ~ {rounds[ORD[-1]]})',
-      f'- 등급 기준: 단골 = 전체 회차의 {args.regular:.0%} 이상, 가끔 = {args.sometimes:.0%} 이상, '
-      f'킬러 = 그 미만이거나 {args.killer_max_rounds}회 이하 출제',
+      f'- 등급 기준: 단골 = {N}회차 중 {REG_K}회 이상 출제({REGULAR:.0%}), '
+      f'킬러 = {args.killer_max_rounds}회만 출제, 가끔 = 그 사이',
       '- 각 개념의 "핵심"은 분류 과정에서 정리한 요약입니다. 수치는 교재·현행 법령과 대조해 쓰세요.', '']
 for s in subjects:
     gs = study(s)
     cs = [c for c in order if concepts[c]['과목'] == s and grades[c] in gs]
     md += [f'## {s}', '', f'학습 범위: **{" + ".join(gs)}** — 개념 {len(cs)}개'
-           + (' (단골만으로는 최근 회차에서 과락 기준 8문제에 못 미쳐 가끔까지 넓힘)' if widen[s] else ''), '']
+           + (' (단골만으로는 최근 회차에서 과락 기준에 못 미쳐 가끔까지 넓힘)' if widen[s] else ''), '']
     cur = None
     for c in sorted(cs, key=lambda c: (concepts[c]['주요항목'], concepts[c]['세부항목'], GORD[grades[c]], -ST[c]['rounds'])):
         k = concepts[c]
@@ -211,9 +248,23 @@ rp += ['', '## 과락 점검 (최근 5회차 역산)', '',
 for s in subjects:
     bs = [b for b in backtest if b[0] == s]
     rp.append(f'| {s} (단골만) | ' + ' | '.join(f'{b[2]}/{b[4]}' for b in bs) + ' | '
-              + ('8문제 미달 회차 있음 → 가끔까지 확대' if widen[s] else '충족') + ' |')
+              + ('과락 기준 미달 회차 있음 → 가끔까지 확대' if widen[s] else '충족') + ' |')
     rp.append(f'| {s} (단골+가끔) | ' + ' | '.join(f'{b[3]}/{b[4]}' for b in bs) + ' | '
               + ('**과락 위험**' if any(b[3] < args.pass_line for b in bs) else '충족') + ' |')
+last = ORD[-args.backtest_rounds:]
+rp.append('| **4과목 합계 (단골만)** | ' + ' | '.join(
+    f"**{sum(b[2] for b in backtest if b[1] == o)}/{sum(b[4] for b in backtest if b[1] == o)}**" for o in last)
+    + f' | 합격선 {args.pass_total:.0%} ' + ('충족' if passes(backtest) else '**미달 회차 있음**') + ' |')
+rp.append('| 4과목 합계 (단골+가끔) | ' + ' | '.join(
+    f"{sum(b[3] for b in backtest if b[1] == o)}/{sum(b[4] for b in backtest if b[1] == o)}" for o in last) + ' | |')
+rp += ['', '## 단골 기준을 정한 근거', '',
+       f'킬러는 {args.killer_max_rounds}회만 출제된 개념으로 고정하고, 단골 기준(출제 회차 수)을 바꿔 가며 "단골만 공부했을 때" 최근 '
+       f'{len(last)}회차 결과를 역산했습니다. '
+       + (f'모든 회차에서 과목당 {args.pass_line}문제 이상, 합계 {args.pass_total:.0%} 이상이 되는 가장 좁은 범위인 '
+          f'**{REG_K}회 이상**을 단골로 잡았습니다.' if AUTO else f'단골 기준은 직접 지정한 {REGULAR:.0%}({REG_K}회 이상)입니다.'), '',
+       '| 단골 기준 | 단골 개념 수 | 과목별 최저 문항 | 4과목 합계(최저~최고) | 단골만으로 합격 |', '|---|---|---|---|---|']
+for k, n, mn, tlo, thi, ok in scan:
+    rp.append(f"| {'**' if k == REG_K else ''}{k}회 이상{'**' if k == REG_K else ''} | {n} | {mn} | {tlo}~{thi} | {'가능' if ok else '불가'} |")
 rp += ['', '## 과락 위험 과목', '']
 for s in subjects:
     bs = [b for b in backtest if b[0] == s]

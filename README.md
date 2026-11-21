@@ -17,7 +17,7 @@
 ## 다시 만드는 법
 
 ```bash
-python3 scripts/analyze.py            # 기준값: --regular 0.3 --sometimes 0.1 --killer-max-rounds 2 (처음 기준은 0.5 / 0.15)
+python3 scripts/analyze.py   # 킬러 = 1회만 출제, 단골 기준은 '단골만으로 합격'하는 범위를 자동 탐색 (--regular 로 직접 지정 가능)
 ```
 
 - `data/tags/tags.csv`: 문항별 개념ID·요지·개정무효 (직접 수정 가능)
